@@ -55,6 +55,7 @@ class Trainer:
         config: TrainerConfig,
         train_loader: DataLoader,
         val_loader: DataLoader | None = None,
+        mesh: device_mesh | None = None,
     ):
         self.model = model
         self.config = config
@@ -64,6 +65,7 @@ class Trainer:
         self.val_loader = val_loader
         self.is_distributed = config.is_distributed
         self.resume_from_checkpoint = config.resume_from_checkpoint
+        self.mesh = mesh
         checkpointer_class = (
             DistributedCheckpointer if self.is_distributed else SingleGPUCheckpointer
         )
@@ -115,7 +117,7 @@ class Trainer:
         if not load_checkpoint and dist.get_rank() == 0:
             full_state_dict = self.model.state_dict()
 
-        apply_fully_sharded(self.model)
+        apply_fully_sharded(self.model, mesh=self.mesh)
 
         if load_checkpoint:
             restored_from_best = self.init_best_val_loss_from_checkpoint_best()

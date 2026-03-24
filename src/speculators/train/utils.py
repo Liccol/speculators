@@ -3,6 +3,7 @@ import os
 
 import torch
 import torch.distributed as dist
+from torch.distributed import device_mesh
 from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
 
 local_rank = int(os.environ.get("LOCAL_RANK", "0"))
@@ -12,33 +13,54 @@ is_distributed = "LOCAL_RANK" in os.environ
 logger = logging.getLogger("speculators")
 
 
-def maybe_setup_distributed() -> tuple[int, int, int, bool]:
+def maybe_setup_distributed(master_addr: str = None, master_port: int = None, nnodes: int = 1, nproc_per_node: int = 1) -> tuple[int, int, int, bool, device_mesh | None]:
     """Sets up distributed training if the process was launched with `torchrun`.
     If not, returns single process training.
 
     Based on of https://docs.pytorch.org/tutorials/intermediate/ddp_tutorial.html#initialize-ddp-with-torch-distributed-run-torchrun
 
+    Args:
+        master_addr: Address of the master node (for multi-node training)
+        master_port: Port of the master node (for multi-node training)
+        nnodes: Total number of nodes
+        nproc_per_node: Number of processes per node
+
     Returns:
-        tuple[int, int, int, bool]: Local rank, world size, rank, and is_distributed.
+        tuple[int, int, int, bool, device_mesh | None]: Local rank, world size, rank, is_distributed, and device mesh.
     """
     if not is_distributed:
         # No distributed training
-        return 0, 1, 0, False
+        return 0, 1, 0, False, None
 
     torch.accelerator.set_device_index(local_rank)
     acc = torch.accelerator.current_accelerator()
     if acc is None:
         raise ValueError("No accelerator found")
     backend = torch.distributed.get_default_backend_for_device(acc)
+    
+    # Set environment variables for multi-node training if provided
+    if master_addr is not None:
+        os.environ["MASTER_ADDR"] = master_addr
+    if master_port is not None:
+        os.environ["MASTER_PORT"] = str(master_port)
+    
     dist.init_process_group(backend, device_id=local_rank)
 
     rank = dist.get_rank()
 
+    # Create device mesh for FSDP
+    # For hybrid sharding: shard within node, replicate across nodes
+    # We create a 2D mesh with shape (nnodes, nproc_per_node)
+    # Use the current accelerator type instead of hardcoding "cuda"
+    acc = torch.accelerator.current_accelerator()
+    device_type = acc.type if acc is not None else "cuda"
+    mesh = device_mesh(device_type, (nnodes, nproc_per_node))
+
     logger.info(
-        f"Started distributed with local_rank={local_rank}, world_size={world_size}",
+        f"Started distributed with local_rank={local_rank}, world_size={world_size}, rank={rank}, mesh={mesh}",
         extra={"override_rank0_filter": True},
     )
-    return local_rank, world_size, rank, True
+    return local_rank, world_size, rank, True, mesh
 
 
 def maybe_destroy_distributed():
@@ -54,21 +76,29 @@ def maybe_destroy_distributed():
     )
 
 
-def apply_fully_sharded(model: torch.nn.Module):
+def apply_fully_sharded(model: torch.nn.Module, mesh: device_mesh | None = None):
     """Applies torch FSDP fully_shard to the model, wrapping layers in FSDPModule.
 
     Assumes the model has a `layers` attribute containing the decoder layers.
     Model should be validated with SpeculatorModel.verify_training_compatible()
     before calling this function.
+    
+    Args:
+        model: The model to apply FSDP to
+        mesh: Device mesh for FSDP. If provided, enables hybrid sharding (fully shard within node, replicate across nodes)
     """
     mp_policy = MixedPrecisionPolicy(
         param_dtype=torch.bfloat16,
         reduce_dtype=torch.float32,
     )
 
+    # For hybrid sharding: shard within node, replicate across nodes
+    # We use the device mesh to specify the sharding strategy
+    sharding_strategy = "fully_shard" if mesh is None else "hybrid_shard"
+    
     for layer in model.layers:  # type: ignore[union-attr]
-        fully_shard(layer, mp_policy=mp_policy)
+        fully_shard(layer, mp_policy=mp_policy, mesh=mesh)
 
-    fully_shard(model)
+    fully_shard(model, mp_policy=mp_policy, mesh=mesh)
 
     return model

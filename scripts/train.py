@@ -147,7 +147,12 @@ def main(args: argparse.Namespace):
     )
 
     # Setup distributed training
-    local_rank, world_size, rank, is_distributed = maybe_setup_distributed()
+    local_rank, world_size, rank, is_distributed, mesh = maybe_setup_distributed(
+        master_addr=args.master_addr,
+        master_port=args.master_port,
+        nnodes=args.nnodes,
+        nproc_per_node=args.nproc_per_node
+    )
     device = torch.device(local_rank)
     print(f"Using device: {device}")
     print(f"Using RANK: {rank}")
@@ -239,7 +244,7 @@ def main(args: argparse.Namespace):
         checkpoint_freq=args.checkpoint_freq,
         save_best=args.save_best,
     )
-    trainer = Trainer(draft_model, trainer_config, train_loader, val_loader)
+    trainer = Trainer(draft_model, trainer_config, train_loader, val_loader, mesh=mesh)
 
     # Run training
     trainer.run_training()
