@@ -4,7 +4,7 @@ from typing import Optional
 
 import torch
 import torch.distributed as dist
-from torch.distributed import init_device_mesh, DeviceMesh
+from torch.distributed import init_device_mesh, device_mesh
 from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
 
 local_rank = int(os.environ.get("LOCAL_RANK", "0"))
@@ -14,7 +14,7 @@ is_distributed = "LOCAL_RANK" in os.environ
 logger = logging.getLogger("speculators")
 
 
-def maybe_setup_distributed(master_addr: str = None, master_port: int = None, nnodes: int = 1, nproc_per_node: int = 1) -> tuple[int, int, int, bool, Optional[DeviceMesh]]:
+def maybe_setup_distributed(master_addr: str = None, master_port: int = None, nnodes: int = 1, nproc_per_node: int = 1) -> tuple[int, int, int, bool, Optional[device_mesh]]:
     """Sets up distributed training if the process was launched with `torchrun`.
     If not, returns single process training.
 
@@ -38,25 +38,21 @@ def maybe_setup_distributed(master_addr: str = None, master_port: int = None, nn
     if acc is None:
         raise ValueError("No accelerator found")
     backend = torch.distributed.get_default_backend_for_device(acc)
-    
-    # Set environment variables for multi-node training if provided
-    if master_addr is not None:
-        os.environ["MASTER_ADDR"] = master_addr
-    if master_port is not None:
-        os.environ["MASTER_PORT"] = str(master_port)
-    
     dist.init_process_group(backend, device_id=local_rank)
 
     rank = dist.get_rank()
 
-    # Create device mesh for FSDP
-    # For hybrid sharding: shard within node, replicate across nodes
-    # We create a 2D mesh with shape (nnodes, nproc_per_node)
-    # Use the current accelerator type instead of hardcoding "cuda"
-    acc = torch.accelerator.current_accelerator()
+    world_size = dist.get_world_size()
+    # # Set environment variables for multi-node training if provided
+    # if master_addr is not None:
+    #     os.environ["MASTER_ADDR"] = master_addr
+    # if master_port is not None:
+    #     os.environ["MASTER_PORT"] = str(master_port)
     device_type = acc.type if acc is not None else "cuda"
-    mesh = init_device_mesh(device_type, (nnodes, nproc_per_node))
-
+    if nproc_per_node == 1 and world_size > 1:
+        nproc_per_node = world_size
+    mesh = init_device_mesh(device_type, (nnodes, nproc_per_node), mesh_dim_names=('dp', 'tp'))
+    print("get=====mesh:", mesh)
     logger.info(
         f"Started distributed with local_rank={local_rank}, world_size={world_size}, rank={rank}, mesh={mesh}",
         extra={"override_rank0_filter": True},
@@ -77,7 +73,7 @@ def maybe_destroy_distributed():
     )
 
 
-def apply_fully_sharded(model: torch.nn.Module, mesh: Optional[DeviceMesh] = None):
+def apply_fully_sharded(model: torch.nn.Module, mesh: Optional[device_mesh] = None):
     """Applies torch FSDP fully_shard to the model, wrapping layers in FSDPModule.
 
     Assumes the model has a `layers` attribute containing the decoder layers.
@@ -103,3 +99,4 @@ def apply_fully_sharded(model: torch.nn.Module, mesh: Optional[DeviceMesh] = Non
     fully_shard(model, mp_policy=mp_policy, mesh=mesh)
 
     return model
+

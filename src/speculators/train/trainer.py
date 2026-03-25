@@ -3,7 +3,7 @@ import os
 import warnings
 from typing import Literal, NamedTuple, Optional
 
-from torch.distributed import DeviceMesh
+from torch.distributed import device_mesh
 
 import torch
 import torch.distributed as dist
@@ -57,7 +57,7 @@ class Trainer:
         config: TrainerConfig,
         train_loader: DataLoader,
         val_loader: Optional[DataLoader] = None,
-        mesh: Optional[DeviceMesh] = None,
+        mesh: Optional[device_mesh] = None,
     ):
         self.model = model
         self.config = config
