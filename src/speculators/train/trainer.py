@@ -1,7 +1,9 @@
 import logging
 import os
 import warnings
-from typing import Literal, NamedTuple
+from typing import Literal, NamedTuple, Optional
+
+from torch.distributed import DeviceMesh
 
 import torch
 import torch.distributed as dist
@@ -54,8 +56,8 @@ class Trainer:
         model: SpeculatorModel,
         config: TrainerConfig,
         train_loader: DataLoader,
-        val_loader: DataLoader | None = None,
-        mesh: device_mesh | None = None,
+        val_loader: Optional[DataLoader] = None,
+        mesh: Optional[DeviceMesh] = None,
     ):
         self.model = model
         self.config = config

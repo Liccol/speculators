@@ -1,9 +1,10 @@
 import logging
 import os
+from typing import Optional
 
 import torch
 import torch.distributed as dist
-from torch.distributed import device_mesh
+from torch.distributed import init_device_mesh, DeviceMesh
 from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
 
 local_rank = int(os.environ.get("LOCAL_RANK", "0"))
@@ -13,7 +14,7 @@ is_distributed = "LOCAL_RANK" in os.environ
 logger = logging.getLogger("speculators")
 
 
-def maybe_setup_distributed(master_addr: str = None, master_port: int = None, nnodes: int = 1, nproc_per_node: int = 1) -> tuple[int, int, int, bool, device_mesh | None]:
+def maybe_setup_distributed(master_addr: str = None, master_port: int = None, nnodes: int = 1, nproc_per_node: int = 1) -> tuple[int, int, int, bool, Optional[DeviceMesh]]:
     """Sets up distributed training if the process was launched with `torchrun`.
     If not, returns single process training.
 
@@ -54,7 +55,7 @@ def maybe_setup_distributed(master_addr: str = None, master_port: int = None, nn
     # Use the current accelerator type instead of hardcoding "cuda"
     acc = torch.accelerator.current_accelerator()
     device_type = acc.type if acc is not None else "cuda"
-    mesh = device_mesh(device_type, (nnodes, nproc_per_node))
+    mesh = init_device_mesh(device_type, (nnodes, nproc_per_node))
 
     logger.info(
         f"Started distributed with local_rank={local_rank}, world_size={world_size}, rank={rank}, mesh={mesh}",
@@ -76,7 +77,7 @@ def maybe_destroy_distributed():
     )
 
 
-def apply_fully_sharded(model: torch.nn.Module, mesh: device_mesh | None = None):
+def apply_fully_sharded(model: torch.nn.Module, mesh: Optional[DeviceMesh] = None):
     """Applies torch FSDP fully_shard to the model, wrapping layers in FSDPModule.
 
     Assumes the model has a `layers` attribute containing the decoder layers.
