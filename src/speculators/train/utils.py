@@ -54,7 +54,7 @@ def maybe_setup_distributed(master_addr: str = None, master_port: int = None, nn
     mesh = init_device_mesh(device_type, (nnodes, nproc_per_node), mesh_dim_names=('dp', 'tp'))
     print("get=====mesh:", mesh)
     logger.info(
-        f"Started distributed with local_rank={local_rank}, world_size={world_size}, rank={rank}, mesh={mesh}",
+        f"Started distributed with local_rank={local_rank}, world_size={world_size}, rank={rank}",
         extra={"override_rank0_filter": True},
     )
     return local_rank, world_size, rank, True, mesh
